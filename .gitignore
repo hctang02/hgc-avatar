@@ -1,0 +1,61 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.so
+.env
+.venv/
+env/
+venv/
+
+# Native-extension build products
+build/
+dist/
+*.egg-info/
+*.egg
+*.o
+*.a
+
+# Datasets and licensed body models. Small helper scripts may remain tracked.
+data/**
+!data/**/
+!data/**/*.py
+pose/**
+!pose/**/
+!pose/**/*.py
+smpl_files/smpl/
+smpl_files/smplx/
+smpl_files/others/
+
+# Learned weights and downloaded checkpoints
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.pth.tar
+!network/lpips/weights/v0.1/vgg.pth
+
+# Experiment artifacts and generated media
+results*/
+test_results*/
+output*/
+debug/
+tmp_quant/
+pose_map_aftercompress*/
+codec_part_file/
+compress_part/data/
+compress_part/data-old/
+compress_part/codec/DCVC-DC/checkpoints/
+compress_part/codec/DCVC-DC/decoded_frames/
+compress_part/codec/DCVC-DC/out_bin/
+compress_part/codec/DCVC-DC/output.json
+compress_part/codec/DCVC-DC/dataset_config_rgb.json
+
+# Locally compiled PoissonRecon binaries
+PoissonRecon/Bin/
+bins/
+
+# Logs and editor metadata
+*.log
+.idea/
+.vscode/
+.DS_Store

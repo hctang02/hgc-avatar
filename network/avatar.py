@@ -1,0 +1,387 @@
+import platform
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import pytorch3d.ops
+import pytorch3d.transforms
+import cv2 as cv
+import os
+import time
+import pyexr
+from PIL import Image
+import json
+
+import config
+from network.styleunet.dual_styleunet import DualStyleUNet
+from gaussians.gaussian_model import GaussianModel
+from gaussians.gaussian_renderer import render3
+
+
+class AvatarNet(nn.Module):
+    def __init__(self, opt):
+        super(AvatarNet, self).__init__()
+        self.opt = opt
+
+        self.random_style = opt.get('random_style', False)
+        self.with_viewdirs = opt.get('with_viewdirs', True)
+
+        # init canonical gausssian model
+        self.max_sh_degree = 0
+        self.cano_gaussian_model = GaussianModel(sh_degree = self.max_sh_degree)
+        cano_smpl_map = cv.imread(config.opt['train']['data']['data_dir'] + '/smpl_pos_map/cano_smpl_pos_map.exr', cv.IMREAD_UNCHANGED)
+
+        self.cano_smpl_map = torch.from_numpy(cano_smpl_map).to(torch.float32).to(config.device)
+        self.cano_smpl_mask = torch.linalg.norm(self.cano_smpl_map, dim = -1) > 0.
+        self.init_points = self.cano_smpl_map[self.cano_smpl_mask]
+        self.lbs = torch.from_numpy(np.load(config.opt['train']['data']['data_dir'] + '/smpl_pos_map/init_pts_lbs.npy')).to(torch.float32).to(config.device)
+        self.cano_gaussian_model.create_from_pcd(self.init_points, torch.rand_like(self.init_points), spatial_lr_scale = 2.5)
+
+        self.color_net = DualStyleUNet(inp_size = 512, inp_ch = 3, out_ch = 3, out_size = 1024, style_dim = 512, n_mlp = 2)
+        self.position_net = DualStyleUNet(inp_size = 512, inp_ch = 3, out_ch = 3, out_size = 1024, style_dim = 512, n_mlp = 2)
+        self.other_net = DualStyleUNet(inp_size = 512, inp_ch = 3, out_ch = 8, out_size = 1024, style_dim = 512, n_mlp = 2)
+
+        self.color_style = torch.ones([1, self.color_net.style_dim], dtype=torch.float32, device=config.device) / np.sqrt(self.color_net.style_dim)
+        self.position_style = torch.ones([1, self.position_net.style_dim], dtype=torch.float32, device=config.device) / np.sqrt(self.position_net.style_dim)
+        self.other_style = torch.ones([1, self.other_net.style_dim], dtype=torch.float32, device=config.device) / np.sqrt(self.other_net.style_dim)
+
+        if self.with_viewdirs:
+            cano_nml_map = cv.imread(config.opt['train']['data']['data_dir'] + '/smpl_pos_map/cano_smpl_nml_map.exr', cv.IMREAD_UNCHANGED)
+            self.cano_nml_map = torch.from_numpy(cano_nml_map).to(torch.float32).to(config.device)
+            self.cano_nmls = self.cano_nml_map[self.cano_smpl_mask]
+            self.viewdir_net = nn.Sequential(
+                nn.Conv2d(1, 64, 4, 2, 1),
+                nn.LeakyReLU(0.2, inplace = True),
+                nn.Conv2d(64, 128, 4, 2, 1)
+            )
+
+    def generate_mean_hands(self):
+        # print('# Generating mean hands ...')
+        import glob
+        # get hand mask
+        lbs_argmax = self.lbs.argmax(1)
+        self.hand_mask = lbs_argmax == 20
+        self.hand_mask = torch.logical_or(self.hand_mask, lbs_argmax == 21)
+        self.hand_mask = torch.logical_or(self.hand_mask, lbs_argmax >= 25)
+
+        pose_map_paths = sorted(glob.glob(config.opt['train']['data']['data_dir'] + '/smpl_pos_map/%08d.exr' % config.opt['test']['fix_hand_id']))
+        smpl_pos_map = cv.imread(pose_map_paths[0], cv.IMREAD_UNCHANGED)
+        pos_map_size = smpl_pos_map.shape[1] // 2
+        smpl_pos_map = np.concatenate([smpl_pos_map[:, :pos_map_size], smpl_pos_map[:, pos_map_size:]], 2)
+        smpl_pos_map = smpl_pos_map.transpose((2, 0, 1))
+        pose_map = torch.from_numpy(smpl_pos_map).to(torch.float32).to(config.device)
+        pose_map = pose_map[:3]
+
+        cano_pts = self.get_positions(pose_map)
+        opacity, scales, rotations = self.get_others(pose_map)
+        colors, color_map = self.get_colors(pose_map)
+
+        self.hand_positions = cano_pts#[self.hand_mask]
+        self.hand_opacity = opacity#[self.hand_mask]
+        self.hand_scales = scales#[self.hand_mask]
+        self.hand_rotations = rotations#[self.hand_mask]
+        self.hand_colors = colors#[self.hand_mask]
+
+        # # debug
+        # hand_pts = trimesh.PointCloud(self.hand_positions.detach().cpu().numpy())
+        # hand_pts.export('./debug/hand_template.obj')
+        # exit(1)
+
+    def transform_cano2live(self, gaussian_vals, items):
+        pt_mats = torch.einsum('nj,jxy->nxy', self.lbs, items['cano2live_jnt_mats'])
+        gaussian_vals['positions'] = torch.einsum('nxy,ny->nx', pt_mats[..., :3, :3], gaussian_vals['positions']) + pt_mats[..., :3, 3]
+        rot_mats = pytorch3d.transforms.quaternion_to_matrix(gaussian_vals['rotations'])
+        rot_mats = torch.einsum('nxy,nyz->nxz', pt_mats[..., :3, :3], rot_mats)
+        gaussian_vals['rotations'] = pytorch3d.transforms.matrix_to_quaternion(rot_mats)
+
+        return gaussian_vals
+
+    def get_positions(self, pose_map, return_map = False):
+        position_map, _ = self.position_net([self.position_style], pose_map[None], randomize_noise = False)
+        front_position_map, back_position_map = torch.split(position_map, [3, 3], 1)
+        position_map = torch.cat([front_position_map, back_position_map], 3)[0].permute(1, 2, 0)
+        delta_position = 0.05 * position_map[self.cano_smpl_mask]
+        # delta_position = position_map[self.cano_smpl_mask]
+        
+        positions = delta_position + self.cano_gaussian_model.get_xyz
+        if return_map:
+            return positions, position_map
+        else:
+            return positions
+
+    def get_others(self, pose_map):
+        other_map, _ = self.other_net([self.other_style], pose_map[None], randomize_noise = False)
+        front_map, back_map = torch.split(other_map, [8, 8], 1)
+        other_map = torch.cat([front_map, back_map], 3)[0].permute(1, 2, 0)
+        others = other_map[self.cano_smpl_mask]  # (N, 8)
+        opacity, scales, rotations = torch.split(others, [1, 3, 4], 1)
+        opacity = self.cano_gaussian_model.opacity_activation(opacity + self.cano_gaussian_model.get_opacity_raw)
+        scales = self.cano_gaussian_model.scaling_activation(scales + self.cano_gaussian_model.get_scaling_raw)
+        rotations = self.cano_gaussian_model.rotation_activation(rotations + self.cano_gaussian_model.get_rotation_raw)
+
+        return opacity, scales, rotations
+
+    def get_colors(self, pose_map, front_viewdirs = None, back_viewdirs = None):
+        # print("1111111111111111111111")
+        color_style = torch.rand_like(self.color_style) if self.random_style and self.training else self.color_style
+        color_map, _ = self.color_net([color_style], pose_map[None], randomize_noise = False, view_feature1 = front_viewdirs, view_feature2 = back_viewdirs)
+        front_color_map, back_color_map = torch.split(color_map, [3, 3], 1)
+        color_map = torch.cat([front_color_map, back_color_map], 3)[0].permute(1, 2, 0)
+        colors = color_map[self.cano_smpl_mask]
+        return colors, color_map
+
+    def get_viewdir_feat(self, items):
+        with torch.no_grad():
+            pt_mats = torch.einsum('nj,jxy->nxy', self.lbs, items['cano2live_jnt_mats'])
+            live_pts = torch.einsum('nxy,ny->nx', pt_mats[..., :3, :3], self.init_points) + pt_mats[..., :3, 3]
+            live_nmls = torch.einsum('nxy,ny->nx', pt_mats[..., :3, :3], self.cano_nmls)
+            cam_pos = -torch.matmul(torch.linalg.inv(items['extr'][:3, :3]), items['extr'][:3, 3])
+            viewdirs = F.normalize(cam_pos[None] - live_pts, dim = -1, eps = 1e-3)
+            if self.training:
+                viewdirs += torch.randn(*viewdirs.shape).to(viewdirs) * 0.1
+            viewdirs = F.normalize(viewdirs, dim = -1, eps = 1e-3)
+            viewdirs = (live_nmls * viewdirs).sum(-1)
+
+            viewdirs_map = torch.zeros(*self.cano_nml_map.shape[:2]).to(viewdirs)
+            viewdirs_map[self.cano_smpl_mask] = viewdirs
+
+            viewdirs_map = viewdirs_map[None, None]
+            viewdirs_map = F.interpolate(viewdirs_map, None, 0.5, 'nearest')
+            front_viewdirs, back_viewdirs = torch.split(viewdirs_map, [512, 512], -1)
+
+        front_viewdirs = self.opt.get('weight_viewdirs', 1.) * self.viewdir_net(front_viewdirs)
+        back_viewdirs = self.opt.get('weight_viewdirs', 1.) * self.viewdir_net(back_viewdirs)
+        return front_viewdirs, back_viewdirs
+
+    def get_pose_map(self, items):
+        pt_mats = torch.einsum('nj,jxy->nxy', self.lbs, items['cano2live_jnt_mats_woRoot'])
+        live_pts = torch.einsum('nxy,ny->nx', pt_mats[..., :3, :3], self.init_points) + pt_mats[..., :3, 3]
+        live_pos_map = torch.zeros_like(self.cano_smpl_map)
+        live_pos_map[self.cano_smpl_mask] = live_pts
+        live_pos_map = F.interpolate(live_pos_map.permute(2, 0, 1)[None], None, [0.5, 0.5], mode = 'nearest')[0]
+        live_pos_map = torch.cat(torch.split(live_pos_map, [512, 512], 2), 0)
+        items.update({
+            'smpl_pos_map': live_pos_map
+        })
+        return live_pos_map
+
+    def render(self, items, bg_color = (0., 0., 0.), use_pca = False, use_vae = False):
+        """
+        Note that no batch index in items.
+        """
+        # def save_items_info(items, output_file):
+        #     with open(output_file, 'w') as f:
+        #         for key, value in items.items():
+        #             if isinstance(value, torch.Tensor):
+        #                 f.write(f"Key: {key}, Shape: {value.shape}\n, Value (sample): {value}\n")
+        #             else:
+        #                 f.write(f"Key: {key}, Type: {type(value)}\n, Value (sample): {value}\n")
+
+        # output_file = f"times/items_info_{items['item_idx']}.txt"  # 结果文件的路径
+        # save_items_info(items, output_file)
+        # items_np = {key: value.cpu().numpy() if isinstance(value, torch.Tensor) else value for key, value in items.items()}
+        # np.save(f"times2/items_npy_{items['item_idx']}", items_np)
+
+        bg_color = torch.from_numpy(np.asarray(bg_color)).to(torch.float32).to(config.device)
+        pose_map = items['smpl_pos_map'][:3]
+        assert not (use_pca and use_vae), "Cannot use both PCA and VAE!"
+        if use_pca:
+            pose_map = items['smpl_pos_map_pca'][:3]
+        if use_vae:
+            pose_map = items['smpl_pos_map_vae'][:3]
+        print("pose_map.shape is ", pose_map.shape)
+
+        # folder_output = "output-sub02-origin-train"
+        folder_output = "output-test--thu02"
+        
+       
+
+        os.makedirs(f"{folder_output}/pose_map_img_new", exist_ok=True)
+
+        # 1. 提取原始 min/max 值
+        pose_min = pose_map.min().item()
+        pose_max = pose_map.max().item()
+        print("Original min/max:", pose_min, pose_max)  # 示例值: -1.248, 0.397
+
+        # 2. 归一化到 [0, 1] 以便保存为图片
+        save_pose_map1 = pose_map.clone()
+        save_pose_map1 = (save_pose_map1 - pose_min) / (pose_max - pose_min)  # 线性映射到 [0,1]
+
+        # 3. 保存为图片
+        save_pose_map1 = (save_pose_map1 * 255).to(torch.uint8)
+        save_pose_map1 = save_pose_map1.permute(1, 2, 0).cpu().numpy()
+        save_pose_map1 = cv.cvtColor(save_pose_map1, cv.COLOR_RGB2BGR)
+        cv.imwrite(f"{folder_output}/pose_map_img_new/pose_map_{items['item_idx']}.png", save_pose_map1)
+
+        
+        pose_range = {"min": pose_min, "max": pose_max}
+        with open(f"{folder_output}/pose_map_img_new/pose_map_{items['item_idx']}_range.json", "w") as f:
+            json.dump(pose_range, f)
+
+        # 1. 读取图片
+        # pose_map_img = cv.imread(f"pose_map_aftercompress/lbn1_point1_q=4/pose_map_{items['item_idx']}.jpg")
+        # pose_map_img = cv.cvtColor(pose_map_img, cv.COLOR_BGR2RGB)  # 转回 RGB
+
+        # # 2. 转换为 Tensor 并归一化到 [0,1]
+        # pose_map_tensor = torch.tensor(pose_map_img, dtype=torch.float32) / 255.0  # [0,1]
+        # pose_map_tensor = pose_map_tensor.permute(2, 0, 1)  # (C, H, W)
+
+        # # 3. 读取之前保存的 min/max 值
+        # # with open(f"codec_part_file/zzr/pose_map_{items['item_idx']}_range.json", "r") as f:
+        # with open(f"compress_part/data/before_compress/output-lbn1-test/json_file/pose_map_{items['item_idx']}_range.json", "r") as f:    
+        #     pose_range = json.load(f)
+        #     loaded_min = pose_range["min"]
+        #     loaded_max = pose_range["max"]
+
+        # # 4. 反归一化：还原到原始范围 [-1.248, 0.397]
+        # pose_map_tensor = pose_map_tensor * (loaded_max - loaded_min) + loaded_min
+        # pose_map_tensor = pose_map_tensor.to(pose_map.device)
+
+        # # 验证数值范围是否一致
+        # print("Restored min/max:", pose_map_tensor.min().item(), pose_map_tensor.max().item())  # 应接近原始值
+
+        # # # 别搞丢了！！这一步是核心操作
+        pose_map_tensor = pose_map
+
+
+
+
+        # 4.用pose_map_tensor来后续操作
+        cano_pts, pos_map = self.get_positions(pose_map_tensor, return_map = True)
+        opacity, scales, rotations = self.get_others(pose_map_tensor)
+        # if not self.training:
+        # scales = torch.clip(scales, 0., 0.03)
+        if self.with_viewdirs:
+            front_viewdirs, back_viewdirs = self.get_viewdir_feat(items)
+        else:
+            front_viewdirs, back_viewdirs = None, None
+        
+        colors, color_map = self.get_colors(pose_map_tensor, front_viewdirs, back_viewdirs)
+        # 创建两个文件夹
+        os.makedirs(f"{folder_output}/colors", exist_ok=True)
+        os.makedirs(f"{folder_output}/color_map", exist_ok=True)
+        # print(f"Type of color_map: {type(color_map)}")
+        # print(f"Shape of color_map: {color_map.shape}")  # 查看维度
+        # print(f"Data type of color_map: {color_map.dtype}")  # 查看数据类型
+        # print(f"device of color_map: {color_map.device}")
+        # # 获取当前时间戳
+        timestamp = int(time.time())
+        
+        
+
+        # 将 color_map 从 Tensor 转换为 NumPy 数组，并保存到 "output/color_map" 文件夹
+        save_color_map = color_map
+        save_color_map.clip_(0., 1.)
+        save_color_map = (save_color_map * 255).to(torch.uint8)
+        # color_map_img = np.clip((color_map.cpu().detach().numpy() * 255), 0, 255).astype(np.uint8)  # 如果数据是归一化到 [0, 1]，转换到 [0, 255]
+        if timestamp % 10000 == 2000:
+            # Image.fromarray(color_map_img).save(f"output/color_map/color_map_{timestamp}.png")  # 保存为 PNG 格式
+            cv.imwrite(f"{folder_output}/color_map/color_map_{items['item_idx']}.png", save_color_map.cpu().numpy())
+        # loaded_image = Image.open(f"output/color_map/color_map_{timestamp}.png")
+        # loaded_image_np = np.array(loaded_image)
+        # loaded_image_np = np.clip(loaded_image_np, 0, 255).astype(np.uint8)
+        # color_map_tensor = torch.tensor(loaded_image_np, dtype=torch.float32) / 255.0  # 归一化回 [0, 1]
+        # os.remove(f"output/color_map/color_map_{timestamp}.png")
+        # 检查类型
+        # print("Type of color_map_tensor:", type(color_map_tensor))
+        # print("Shape of color_map_tensor:", color_map_tensor.shape)
+        # print(f"Data type of color_map_tensor: {color_map_tensor.dtype}")  # 查看数据类型
+        # print(f"device of color_map_tensor: {color_map_tensor.device}")
+
+        # color_map_tensor = color_map_tensor.to(self.cano_smpl_mask.device)
+        
+        # colors = color_map_tensor[self.cano_smpl_mask]
+        print("2222222222222")
+
+        if not self.training and config.opt['test'].get('fix_hand', False) and config.opt['mode'] == 'test':
+            # print('# fuse hands ...')
+            import utils.geo_util as geo_util
+            cano_xyz = self.init_points
+            wl = torch.sigmoid(2.5 * (geo_util.normalize_vert_bbox(items['left_cano_mano_v'], attris = cano_xyz, dim = 0, per_axis = True)[..., 0:1] + 2.0))
+            wr = torch.sigmoid(-2.5 * (geo_util.normalize_vert_bbox(items['right_cano_mano_v'], attris = cano_xyz, dim = 0, per_axis = True)[..., 0:1] - 2.0))
+            wl[cano_xyz[..., 1] < items['cano_smpl_center'][1]] = 0.
+            wr[cano_xyz[..., 1] < items['cano_smpl_center'][1]] = 0.
+
+            s = torch.maximum(wl + wr, torch.ones_like(wl))
+            wl, wr = wl / s, wr / s
+
+            w = wl + wr
+            cano_pts = w * self.hand_positions + (1.0 - w) * cano_pts
+            opacity = w * self.hand_opacity + (1.0 - w) * opacity
+            scales = w * self.hand_scales + (1.0 - w) * scales
+            rotations = w * self.hand_rotations + (1.0 - w) * rotations
+            # colors = w * self.hand_colors + (1.0 - w) * colors
+
+        gaussian_vals = {
+            'positions': cano_pts,
+            'opacity': opacity,
+            'scales': scales,
+            'rotations': rotations,
+            'colors': colors,
+            'max_sh_degree': self.max_sh_degree
+        }
+
+        nonrigid_offset = gaussian_vals['positions'] - self.init_points
+
+        gaussian_vals = self.transform_cano2live(gaussian_vals, items)
+
+        render_ret = render3(
+            gaussian_vals,
+            bg_color,
+            items['extr'],
+            items['intr'],
+            items['img_w'],
+            items['img_h']
+        )
+        rgb_map = render_ret['render'].permute(1, 2, 0)
+        mask_map = render_ret['mask'].permute(1, 2, 0)
+
+        ret = {
+            'rgb_map': rgb_map,
+            'mask_map': mask_map,
+            'offset': nonrigid_offset,
+            'pos_map': pos_map
+        }
+
+        if not self.training:
+            ret.update({
+                'cano_tex_map': color_map,
+                'posed_gaussians': gaussian_vals
+            })
+
+        return ret
+    
+    def compute_flops(self, input_shape=(3, 512, 512)):
+        """
+        用于计算AvatarNet模型的FLOPs和参数量
+        input_shape: 模拟的输入维度，例如 (3, 512, 512)
+        """
+        from ptflops import get_model_complexity_info
+
+        def dummy_forward_hook(m, x, y):
+            # 避免 forward 过程中调用 render、文件IO 等
+            return y
+
+        try:
+            print(f"\n🔍 Estimating FLOPs for AvatarNet with input size {input_shape} ...")
+            with torch.cuda.device(0):
+                macs, params = get_model_complexity_info(
+                    self,
+                    input_shape,
+                    as_strings=True,
+                    print_per_layer_stat=False,
+                    verbose=False,
+                    custom_modules_hooks={nn.Sequential: dummy_forward_hook}
+                )
+                print(f"AvatarNet FLOPs:\n  MACs: {macs}\n  Params: {params}")
+        except RuntimeError as e:
+            print("❌ Error while computing FLOPs:", e)
+
+    def forward(self, x):
+    # 为了支持FLOPs计算，x 是一个 (B, 3, H, W) 的 pose_map_tensor
+    # 此处假设只调用一个分支，比如 self.color_net
+        out1, _ = self.color_net([self.color_style], x, randomize_noise=False)
+        out2, _ = self.position_net([self.position_style], x, randomize_noise=False)
+        out3, _ = self.other_net([self.other_style], x, randomize_noise=False)
+        return out1 + out2 # ✅ 拼接通道维度，不要求 shape 一致
+    
