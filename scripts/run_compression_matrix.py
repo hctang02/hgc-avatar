@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -218,6 +219,12 @@ def main():
             parser.error(f"Unknown subjects: {sorted(requested - found)}")
     output_dir = Path(matrix["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    started_marker = output_dir / "run_started.json"
+    if not started_marker.is_file():
+        started_marker.write_text(
+            json.dumps({"started_at": datetime.now(timezone.utc).astimezone().isoformat()}, indent=2),
+            encoding="utf-8",
+        )
     started = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = [executor.submit(run_subject, matrix, subject) for subject in matrix["subjects"]]
@@ -232,7 +239,9 @@ def main():
         writer.writerows(rows)
     metadata = {
         "matrix_config": str(config_path),
-        "elapsed_seconds": time.time() - started,
+        "started_at": json_load(started_marker)["started_at"],
+        "completed_at": datetime.now(timezone.utc).astimezone().isoformat(),
+        "current_invocation_seconds": time.time() - started,
         "subjects": len(matrix["subjects"]),
         "operating_points": len(rows),
     }

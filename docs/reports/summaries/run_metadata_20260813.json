@@ -1,6 +1,9 @@
 {
   "matrix_config": "/mnt/hdd2tC/tmp/haocheng/hgc-avatar/configs/experiments/compression_matrix.server.yaml",
-  "elapsed_seconds": 0.4682579040527344,
+  "started_at": "2026-08-13T15:41:38+08:00",
+  "completed_at": "2026-08-13T17:03:21+08:00",
+  "wall_clock_seconds": 4903,
+  "note": "断点续跑总墙钟时间；各阶段细分时间见每个人物的 experiment.log 和 network metrics.json。",
   "subjects": 4,
   "operating_points": 16
 }
