@@ -1,0 +1,43 @@
+# 服务器实测矩阵：四个已有完整检查点的人物，每段统一取前 500 帧。
+output_dir: /mnt/hdd2tC/tmp/haocheng/hgc-avatar-runs/compression-matrix-20260813
+frame_range: [0, 500, 1]
+quantization_levels: [4, 5, 6, 7]
+smpl_model_path: /mnt/ssd2tB/haocheng/AnimatableGaussians/smpl_files/smplx
+
+posemap:
+  codec_dir: /mnt/hdd2tC/tmp/haocheng/hgc-avatar/compress_part/codec/DCVC-DC
+  i_frame_model: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/codec/DCVC-DC/checkpoints/cvpr2023_image_psnr.pth.tar
+  p_frame_model: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/codec/DCVC-DC/checkpoints/cvpr2023_video_psnr.pth.tar
+  rate_num: 2
+  rate_index: 0
+  intra_period: 32
+
+subjects:
+  - name: lbn1
+    family: AvatarReX
+    dataset: MvRgbDatasetAvatarReX
+    avatar_config: configs/avatarrex_lbn1/avatar.yaml
+    data_dir: /mnt/ssd2tB/haocheng/AnimatableGaussians/data/avatarrex/lbn1
+    checkpoint: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/data/before_compress/output-lbn1-test/batch_800000
+    cuda_device: 0
+  - name: zzr
+    family: AvatarReX
+    dataset: MvRgbDatasetAvatarReX
+    avatar_config: configs/avatarrex_zzr/avatar.yaml
+    data_dir: /mnt/ssd2tB/haocheng/AnimatableGaussians/data/avatarrex/zzr
+    checkpoint: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/data/before_compress/output-zzr-test/batch_650000
+    cuda_device: 2
+  - name: subject00
+    family: THuman4.0
+    dataset: MvRgbDatasetTHuman4
+    avatar_config: configs/subject00/avatar.yaml
+    data_dir: /mnt/ssd2tB/haocheng/AnimatableGaussians/data/thuman4.0/subject00
+    checkpoint: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/data/before_compress/output-thu00-test/batch_650000
+    cuda_device: 3
+  - name: subject02
+    family: THuman4.0
+    dataset: MvRgbDatasetTHuman4
+    avatar_config: configs/subject02/avatar.yaml
+    data_dir: /mnt/ssd2tB/haocheng/AnimatableGaussians/data/thuman4.0/subject02
+    checkpoint: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/data/before_compress/output-thu02-test/batch_650000
+    cuda_device: 4

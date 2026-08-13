@@ -186,7 +186,37 @@ work_dir/
 └── verification.json
 ```
 
-`compression_manifest.json` 记录三类码流大小、DCVC bpp/PSNR 和压缩参数；`verification.json` 记录两端帧数及编码端—解码端图像 PSNR/MAE。
+`compression_manifest.json` 记录三类码流大小、DCVC bpp/PSNR 和压缩参数；`verification.json` 记录两端帧数及编码端—解码端图像 PSNR/SSIM/MAE。
+
+## 批量分层压缩实验
+
+服务器实验矩阵包含 AvatarReX `lbn1`/`zzr` 和 THuman4.0 `subject00`/`subject02`，每个人物统一前 500 帧，网络量化层级为 `q=4/5/6/7`。SMPL-X 保持无损，PoseMap 保持 DCVC rate 0，因此同一人物的四个点只改变网络量化。
+
+```bash
+python scripts/run_compression_matrix.py \
+  --config configs/experiments/compression_matrix.server.yaml \
+  --jobs 4
+```
+
+脚本按人物并行、按 q 层级串行，支持断点续跑。完成后生成：
+
+- `experiment_summary.json`：Word 报告和绘图的唯一数值源；
+- `experiment_summary.csv`：UTF-8 with BOM 表格；
+- `<subject>/experiment.log`：每个人物的全阶段日志；
+- `q4/encoder`：共享的编码端结果，`q5–q7` 通过符号链接复用；
+- 各 q 的网络码流、解码检查点、解码端渲染和 `verification.json`。
+
+中文 Word 报告可重新生成：
+
+```bash
+python scripts/generate_experiment_report.py \
+  --summary /path/to/experiment_summary.json \
+  --run-dir /path/to/compression-matrix-run \
+  --figure-dir docs/reports/figures \
+  --output docs/reports/HGC-Avatar多数据集分层压缩实验报告.docx
+```
+
+实测数值、报告和 WD1.0 标准草案见 [`docs/`](docs/README.md)。
 
 ## 只运行头像训练或测试
 

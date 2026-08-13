@@ -153,6 +153,7 @@ class Pipeline:
         network_q_index = self.compression.get("network_q_index", 5)
         network_bits = network_stream_dir / f"{network_q_index}_bits"
         network_header = network_stream_dir / f"{network_q_index}_header"
+        network_metrics = network_stream_dir / "metrics.json"
         network_meta_path = network_stream_dir / "metadata.json"
         desired_network_meta = {
             "source": str(self.source_checkpoint),
@@ -164,7 +165,7 @@ class Pipeline:
         if network_meta_path.is_file():
             existing_network_meta = json.loads(network_meta_path.read_text(encoding="utf-8"))
         if existing_network_meta != desired_network_meta or not all(
-            path.is_file() for path in (decoded_checkpoint, network_bits, network_header)
+            path.is_file() for path in (decoded_checkpoint, network_bits, network_header, network_metrics)
         ):
             print("Compressing StyleUNet parameters...", flush=True)
             subprocess.run(
@@ -179,6 +180,8 @@ class Pipeline:
                     str(network_stream_dir),
                     "--q_index",
                     str(network_q_index),
+                    "--metrics_path",
+                    str(network_metrics),
                 ],
                 cwd=PROJECT_DIR / "compress_part/codec/quantization",
                 check=True,
@@ -211,6 +214,7 @@ class Pipeline:
                 "decoded_bytes": decoded_checkpoint.stat().st_size,
                 "header_bytes": network_header.stat().st_size,
                 "bitstream_bytes": network_bits.stat().st_size,
+                "metrics": json.loads(network_metrics.read_text(encoding="utf-8")),
             },
             "posemap": posemap_result,
         }
@@ -239,18 +243,26 @@ class Pipeline:
         common_names = sorted(encoder_frames.keys() & decoder_frames.keys())
         psnrs = []
         maes = []
+        ssims = []
         for name in common_names:
-            encoder_image = cv.imread(str(encoder_frames[name]), cv.IMREAD_COLOR).astype(np.float32)
-            decoder_image = cv.imread(str(decoder_frames[name]), cv.IMREAD_COLOR).astype(np.float32)
+            encoder_uint8 = cv.imread(str(encoder_frames[name]), cv.IMREAD_COLOR)
+            decoder_uint8 = cv.imread(str(decoder_frames[name]), cv.IMREAD_COLOR)
+            encoder_image = encoder_uint8.astype(np.float32)
+            decoder_image = decoder_uint8.astype(np.float32)
             difference = encoder_image - decoder_image
             mse = float(np.mean(difference ** 2))
             psnrs.append(float("inf") if mse == 0 else 10 * np.log10(255.0 ** 2 / mse))
             maes.append(float(np.mean(np.abs(difference))))
+            if hasattr(cv, "quality"):
+                channel_ssim = cv.quality.QualitySSIM_compute(encoder_uint8, decoder_uint8)[0]
+                ssims.append(float(np.mean(channel_ssim[:3])))
         report["encoder_decoder_comparison"] = {
             "matched_frames": len(common_names),
             "mean_psnr_db": float(np.mean(psnrs)),
             "mean_absolute_error_8bit": float(np.mean(maes)),
         }
+        if ssims:
+            report["encoder_decoder_comparison"]["mean_ssim"] = float(np.mean(ssims))
         report_path = self.work_dir / "verification.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return report

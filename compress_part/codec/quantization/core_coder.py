@@ -1,6 +1,7 @@
 import os
 import math
 import argparse
+import json
 import torch
 import numpy as np
 from bitstream.range_coder import RangeCoder
@@ -135,6 +136,7 @@ def main():
     parser.add_argument('--input_ckpt', type=str)
     parser.add_argument('--output_ckpt', type=str)
     parser.add_argument('--bitstream_dir', type=str)
+    parser.add_argument('--metrics_path', type=str)
     args = parser.parse_args()
 
     direct_mode = args.input_ckpt or args.output_ckpt or args.bitstream_dir
@@ -187,6 +189,25 @@ def main():
     }
     torch.save(final_result, output_ckpt)
     print("✅ 编码 & 解码完成，保存到:", output_ckpt)
+
+    metrics = {
+        "q_index": args.q_index,
+        "q_step": float(Q_step_list[args.q_index]),
+        "source_checkpoint_bytes": os.path.getsize(ckpt_path),
+        "decoded_checkpoint_bytes": os.path.getsize(output_ckpt),
+        "header_bytes": os.path.getsize(header_path),
+        "bitstream_bytes": os.path.getsize(bits_path),
+        "mse": mse,
+        "max_absolute_error": max_err,
+        "encoding_seconds": encoding_time,
+        "decoding_seconds": decoding_time,
+    }
+    if args.metrics_path:
+        metrics_dir = os.path.dirname(args.metrics_path)
+        if metrics_dir:
+            os.makedirs(metrics_dir, exist_ok=True)
+        with open(args.metrics_path, 'w', encoding='utf-8') as fout:
+            json.dump(metrics, fout, ensure_ascii=False, indent=2)
 
     print(f"\n网络参数总编码时长: {encoding_time:.2f} 秒")
     print(f"网络参数总解码时长: {decoding_time:.2f} 秒")
