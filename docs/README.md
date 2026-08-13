@@ -8,13 +8,15 @@ Word 文档由以下命令生成：
 
 ```bash
 python scripts/generate_digital_human_standard.py \
-  --output docs/standards/三维数字人智能编码标准_WD1.0.docx
+  --output docs/standards/3D_Digital_Human_Intelligent_Coding_Standard_WD1.0_CN.docx
 
 python scripts/generate_experiment_report.py \
   --summary /path/to/experiment_summary.json \
   --run-dir /path/to/compression-matrix-run \
   --figure-dir docs/reports/figures \
-  --output docs/reports/HGC-Avatar多数据集分层压缩实验报告.docx
+  --output docs/reports/HGC_Avatar_Multi_Dataset_Compression_Report_CN.docx
 ```
 
 完整渲染帧、模型、原始数据和压缩码流只保存在服务器实验目录，不进入 Git。
+
+> 为避免 Windows/Linux、UTF-8/GBK 之间传输时文件名出现乱码，最终 Word 文档统一使用 ASCII 文件名。Word 内部封面、标题和正文仍为中文。
