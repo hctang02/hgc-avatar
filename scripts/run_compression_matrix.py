@@ -202,11 +202,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/experiments/compression_matrix.server.yaml")
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--subjects", nargs="*", help="Only run the named subjects")
     args = parser.parse_args()
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = PROJECT_DIR / config_path
     matrix = load_yaml(config_path)
+    if args.subjects:
+        requested = set(args.subjects)
+        matrix["subjects"] = [
+            subject for subject in matrix["subjects"] if subject["name"] in requested
+        ]
+        found = {subject["name"] for subject in matrix["subjects"]}
+        if found != requested:
+            parser.error(f"Unknown subjects: {sorted(requested - found)}")
     output_dir = Path(matrix["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()

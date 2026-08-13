@@ -369,7 +369,7 @@ def generate(summary_path, run_dir, output, figure_dir):
     doc.add_picture(str(sample_grid), width=Cm(16.7))
     cap = doc.add_paragraph("图 4 — 编码端参考、q4 解码和 q7 解码的中间帧对比（四人物）")
     cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    paragraph(doc, "代表帧用于直观检查姿态、轮廓、纹理和背景是否同步，不代替全 500 帧指标。全量验证逐文件名匹配 encoder/decoder JPG，计算 8 位图像空间 PSNR、SSIM 和 MAE；若帧缺失则对应工作点不会进入汇总。")
+    paragraph(doc, "代表帧用于直观检查姿态、轮廓、纹理和背景是否同步，不代替全 500 帧指标。全量验证逐文件名匹配 encoder/decoder JPG，计算 8 位图像空间 PSNR、灰度 SSIM 和 MAE；若帧缺失则对应工作点不会进入汇总。")
     add_table(doc, ["人物", "q4 PSNR", "q5 PSNR", "q6 PSNR", "q7 PSNR", "q7 SSIM"], [
         (subject, *[f"{next(v for v in values if int(v['q_index'])==q)['reference_psnr_db']:.3f}" for q in q_values], f"{next(v for v in values if int(v['q_index'])==q_values[-1])['reference_ssim']:.6f}") for subject, values in sorted(by_subject.items())
     ])

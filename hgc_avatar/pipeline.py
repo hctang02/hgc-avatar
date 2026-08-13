@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 import cv2 as cv
 import numpy as np
+from skimage.metrics import structural_similarity
 
 from hgc_avatar.codecs.posemap_dcvc import run_dcvc
 from hgc_avatar.codecs.smpl_huffman import decode as decode_smpl
@@ -253,9 +254,11 @@ class Pipeline:
             mse = float(np.mean(difference ** 2))
             psnrs.append(float("inf") if mse == 0 else 10 * np.log10(255.0 ** 2 / mse))
             maes.append(float(np.mean(np.abs(difference))))
-            if hasattr(cv, "quality"):
-                channel_ssim = cv.quality.QualitySSIM_compute(encoder_uint8, decoder_uint8)[0]
-                ssims.append(float(np.mean(channel_ssim[:3])))
+            encoder_gray = cv.cvtColor(encoder_uint8, cv.COLOR_BGR2GRAY)
+            decoder_gray = cv.cvtColor(decoder_uint8, cv.COLOR_BGR2GRAY)
+            ssims.append(
+                float(structural_similarity(encoder_gray, decoder_gray, data_range=255))
+            )
         report["encoder_decoder_comparison"] = {
             "matched_frames": len(common_names),
             "mean_psnr_db": float(np.mean(psnrs)),
