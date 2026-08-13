@@ -67,32 +67,21 @@ Git 仓库只保存核心代码和配置，不保存以下大文件：
 
 ## 统一环境
 
-推荐统一使用一个环境，不再在 `anim-gaussian` 与 `compress` 之间切换。本机已验证环境位于：
+统一使用 `hgc-avatar` 环境，不再在 `anim-gaussian` 与 `compress` 之间切换。本机已验证环境位于：
 
 ```bash
 /mnt/hdd2tC/tmp/haocheng/conda_envs/hgc-avatar
 ```
 
-如果旧 `anim-gaussian` 环境本身可以渲染，最稳妥的合并方法是克隆后补两个压缩依赖：
-
-```bash
-conda create --clone /path/to/envs/anim-gaussian -p /path/to/envs/hgc-avatar
-conda activate /path/to/envs/hgc-avatar
-python -m pip install constriction==0.4.1 pytorch-msssim==1.0.0
-```
-
-也可以从头创建：
+环境配置只使用下面这一种方案：
 
 ```bash
 conda env create -f environment.yml
 conda activate hgc-avatar
-```
-
-随后编译头像渲染、StyleUNet、自定义算子和 DCVC 的 C++ 扩展：
-
-```bash
 PYTHON="$(which python)" ./scripts/build_extensions.sh
 ```
+
+这个环境同时包含头像重建、StyleUNet 网络压缩、SMPL-X Huffman 压缩和 DCVC-DC PoseMap 视频压缩所需的依赖。
 
 关键版本为 Python 3.8.20、PyTorch 2.0.0、TorchVision 0.15.1、CUDA 11.7、PyTorch3D 0.7.3、NumPy 1.21.6、`constriction` 0.4.1 与 `pytorch-msssim` 1.0.0。
 
@@ -151,7 +140,16 @@ python -m hgc_avatar.pipeline \
   --stage all
 ```
 
-也可以分别运行，便于恢复中断实验：
+这一条命令会自动完成：
+
+1. 编码端原始 `test` 和 PoseMap 导出；
+2. SMPL-X、StyleUNet 网络参数和 PoseMap 三路压缩/解压；
+3. 使用三路解码中间量执行第二次 `test`；
+4. 统计码流、帧数和编解码端图像差异。
+
+因此，正常复现时不需要再手工运行任何 codec 命令。
+
+仅当某个阶段中断、不希望从头执行时，才需要分阶段运行：
 
 ```bash
 python -m hgc_avatar.pipeline --config configs/pipeline/my_subject.yaml --stage encode
@@ -212,7 +210,9 @@ CUDA_VISIBLE_DEVICES=0 python main_avatar.py \
 
 `test.data.smpl_path` 可以显式指向解码后的 `smpl_params.npz`，不再需要覆盖数据集原文件。
 
-## 单独使用三个 codec
+## 高级调试：单独运行 codec（可选）
+
+`--stage all` 已经会自动调用下面三个 codec。本节不是正常流程的必做步骤，只在调试某一路码流、做消融实验或单独调整压缩参数时使用。
 
 SMPL-X 无损流：
 
