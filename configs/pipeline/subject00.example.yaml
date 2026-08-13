@@ -1,0 +1,25 @@
+# HGC-Avatar 端到端复现配置。运行前将路径改为本机实际位置。
+work_dir: /path/to/hgc-avatar-runs/subject00
+
+source:
+  subject_name: subject00
+  dataset: MvRgbDatasetTHuman4
+  avatar_config: configs/subject00/avatar.yaml
+  data_dir: /path/to/data/thuman4.0/subject00
+  smpl_model_path: /path/to/smpl_files/smplx
+  checkpoint: /path/to/checkpoint/batch_650000
+  frame_range: [0, 500, 1]
+  view_setting: front
+  img_scale: 1.0
+  cuda_device: 0
+
+compression:
+  network_q_index: 5
+  posemap:
+    codec_dir: compress_part/codec/DCVC-DC
+    i_frame_model: /path/to/checkpoints/cvpr2023_image_psnr.pth.tar
+    p_frame_model: /path/to/checkpoints/cvpr2023_video_psnr.pth.tar
+    rate_num: 2
+    rate_index: 0
+    intra_period: 32
+

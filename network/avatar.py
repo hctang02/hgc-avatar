@@ -7,15 +7,13 @@ import pytorch3d.ops
 import pytorch3d.transforms
 import cv2 as cv
 import os
-import time
 import pyexr
-from PIL import Image
-import json
 
 import config
 from network.styleunet.dual_styleunet import DualStyleUNet
 from gaussians.gaussian_model import GaussianModel
 from gaussians.gaussian_renderer import render3
+from utils.pose_map_io import export_pose_map, load_pose_map
 
 
 class AvatarNet(nn.Module):
@@ -189,64 +187,27 @@ class AvatarNet(nn.Module):
             pose_map = items['smpl_pos_map_pca'][:3]
         if use_vae:
             pose_map = items['smpl_pos_map_vae'][:3]
-        print("pose_map.shape is ", pose_map.shape)
+        pose_map_io = self.opt.get('pose_map_io', {})
+        pose_map_mode = pose_map_io.get('mode', 'native')
+        if pose_map_mode == 'export':
+            output_dir = pose_map_io.get('output_dir')
+            if not output_dir:
+                raise ValueError('model.pose_map_io.output_dir is required in export mode')
+            export_pose_map(pose_map, items['data_idx'], output_dir)
+            pose_map_tensor = pose_map
+        elif pose_map_mode == 'decoded':
+            frame_dir = pose_map_io.get('frame_dir')
+            range_dir = pose_map_io.get('range_dir')
+            if not frame_dir or not range_dir:
+                raise ValueError('frame_dir and range_dir are required in decoded mode')
+            pose_map_tensor = load_pose_map(
+                items['data_idx'], frame_dir, range_dir, pose_map.device
+            )
+        elif pose_map_mode == 'native':
+            pose_map_tensor = pose_map
+        else:
+            raise ValueError(f'Unknown model.pose_map_io.mode: {pose_map_mode}')
 
-        # folder_output = "output-sub02-origin-train"
-        folder_output = "output-test--thu02"
-        
-       
-
-        os.makedirs(f"{folder_output}/pose_map_img_new", exist_ok=True)
-
-        # 1. 提取原始 min/max 值
-        pose_min = pose_map.min().item()
-        pose_max = pose_map.max().item()
-        print("Original min/max:", pose_min, pose_max)  # 示例值: -1.248, 0.397
-
-        # 2. 归一化到 [0, 1] 以便保存为图片
-        save_pose_map1 = pose_map.clone()
-        save_pose_map1 = (save_pose_map1 - pose_min) / (pose_max - pose_min)  # 线性映射到 [0,1]
-
-        # 3. 保存为图片
-        save_pose_map1 = (save_pose_map1 * 255).to(torch.uint8)
-        save_pose_map1 = save_pose_map1.permute(1, 2, 0).cpu().numpy()
-        save_pose_map1 = cv.cvtColor(save_pose_map1, cv.COLOR_RGB2BGR)
-        cv.imwrite(f"{folder_output}/pose_map_img_new/pose_map_{items['item_idx']}.png", save_pose_map1)
-
-        
-        pose_range = {"min": pose_min, "max": pose_max}
-        with open(f"{folder_output}/pose_map_img_new/pose_map_{items['item_idx']}_range.json", "w") as f:
-            json.dump(pose_range, f)
-
-        # 1. 读取图片
-        # pose_map_img = cv.imread(f"pose_map_aftercompress/lbn1_point1_q=4/pose_map_{items['item_idx']}.jpg")
-        # pose_map_img = cv.cvtColor(pose_map_img, cv.COLOR_BGR2RGB)  # 转回 RGB
-
-        # # 2. 转换为 Tensor 并归一化到 [0,1]
-        # pose_map_tensor = torch.tensor(pose_map_img, dtype=torch.float32) / 255.0  # [0,1]
-        # pose_map_tensor = pose_map_tensor.permute(2, 0, 1)  # (C, H, W)
-
-        # # 3. 读取之前保存的 min/max 值
-        # # with open(f"codec_part_file/zzr/pose_map_{items['item_idx']}_range.json", "r") as f:
-        # with open(f"compress_part/data/before_compress/output-lbn1-test/json_file/pose_map_{items['item_idx']}_range.json", "r") as f:    
-        #     pose_range = json.load(f)
-        #     loaded_min = pose_range["min"]
-        #     loaded_max = pose_range["max"]
-
-        # # 4. 反归一化：还原到原始范围 [-1.248, 0.397]
-        # pose_map_tensor = pose_map_tensor * (loaded_max - loaded_min) + loaded_min
-        # pose_map_tensor = pose_map_tensor.to(pose_map.device)
-
-        # # 验证数值范围是否一致
-        # print("Restored min/max:", pose_map_tensor.min().item(), pose_map_tensor.max().item())  # 应接近原始值
-
-        # # # 别搞丢了！！这一步是核心操作
-        pose_map_tensor = pose_map
-
-
-
-
-        # 4.用pose_map_tensor来后续操作
         cano_pts, pos_map = self.get_positions(pose_map_tensor, return_map = True)
         opacity, scales, rotations = self.get_others(pose_map_tensor)
         # if not self.training:
@@ -257,42 +218,6 @@ class AvatarNet(nn.Module):
             front_viewdirs, back_viewdirs = None, None
         
         colors, color_map = self.get_colors(pose_map_tensor, front_viewdirs, back_viewdirs)
-        # 创建两个文件夹
-        os.makedirs(f"{folder_output}/colors", exist_ok=True)
-        os.makedirs(f"{folder_output}/color_map", exist_ok=True)
-        # print(f"Type of color_map: {type(color_map)}")
-        # print(f"Shape of color_map: {color_map.shape}")  # 查看维度
-        # print(f"Data type of color_map: {color_map.dtype}")  # 查看数据类型
-        # print(f"device of color_map: {color_map.device}")
-        # # 获取当前时间戳
-        timestamp = int(time.time())
-        
-        
-
-        # 将 color_map 从 Tensor 转换为 NumPy 数组，并保存到 "output/color_map" 文件夹
-        save_color_map = color_map
-        save_color_map.clip_(0., 1.)
-        save_color_map = (save_color_map * 255).to(torch.uint8)
-        # color_map_img = np.clip((color_map.cpu().detach().numpy() * 255), 0, 255).astype(np.uint8)  # 如果数据是归一化到 [0, 1]，转换到 [0, 255]
-        if timestamp % 10000 == 2000:
-            # Image.fromarray(color_map_img).save(f"output/color_map/color_map_{timestamp}.png")  # 保存为 PNG 格式
-            cv.imwrite(f"{folder_output}/color_map/color_map_{items['item_idx']}.png", save_color_map.cpu().numpy())
-        # loaded_image = Image.open(f"output/color_map/color_map_{timestamp}.png")
-        # loaded_image_np = np.array(loaded_image)
-        # loaded_image_np = np.clip(loaded_image_np, 0, 255).astype(np.uint8)
-        # color_map_tensor = torch.tensor(loaded_image_np, dtype=torch.float32) / 255.0  # 归一化回 [0, 1]
-        # os.remove(f"output/color_map/color_map_{timestamp}.png")
-        # 检查类型
-        # print("Type of color_map_tensor:", type(color_map_tensor))
-        # print("Shape of color_map_tensor:", color_map_tensor.shape)
-        # print(f"Data type of color_map_tensor: {color_map_tensor.dtype}")  # 查看数据类型
-        # print(f"device of color_map_tensor: {color_map_tensor.device}")
-
-        # color_map_tensor = color_map_tensor.to(self.cano_smpl_mask.device)
-        
-        # colors = color_map_tensor[self.cano_smpl_mask]
-        print("2222222222222")
-
         if not self.training and config.opt['test'].get('fix_hand', False) and config.opt['mode'] == 'test':
             # print('# fuse hands ...')
             import utils.geo_util as geo_util
@@ -350,7 +275,7 @@ class AvatarNet(nn.Module):
             })
 
         return ret
-    
+
     def compute_flops(self, input_shape=(3, 512, 512)):
         """
         用于计算AvatarNet模型的FLOPs和参数量
@@ -384,4 +309,3 @@ class AvatarNet(nn.Module):
         out2, _ = self.position_net([self.position_style], x, randomize_noise=False)
         out3, _ = self.other_net([self.other_style], x, randomize_noise=False)
         return out1 + out2 # ✅ 拼接通道维度，不要求 shape 一致
-    

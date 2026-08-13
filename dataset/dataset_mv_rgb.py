@@ -23,7 +23,9 @@ class MvRgbDatasetBase(Dataset):
         subject_name = None,
         load_smpl_pos_map = False,
         load_smpl_nml_map = False,
-        mode = '3dgs'
+        mode = '3dgs',
+        smpl_path = None,
+        smpl_model_path = None
     ):
         super(MvRgbDatasetBase, self).__init__()
 
@@ -34,12 +36,14 @@ class MvRgbDatasetBase(Dataset):
             self.subject_name = os.path.basename(self.data_dir)
         self.load_smpl_pos_map = load_smpl_pos_map
         self.load_smpl_nml_map = load_smpl_nml_map
+        self.smpl_path = smpl_path or os.path.join(data_dir, 'smpl_params.npz')
+        self.smpl_model_path = smpl_model_path or os.path.join(config.PROJ_DIR, 'smpl_files', 'smplx')
         self.mode = mode  # '3dgs' or 'nerf'
 
         self.load_cam_data()
         self.load_smpl_data()
 
-        self.smpl_model = smplx.SMPLX(model_path = config.PROJ_DIR + '/smpl_files/smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, batch_size = 1)
+        self.smpl_model = smplx.SMPLX(model_path = self.smpl_model_path, gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, batch_size = 1)
 
         pose_list = list(range(self.smpl_data['body_pose'].shape[0]))
         if frame_range is not None:
@@ -113,7 +117,6 @@ class MvRgbDatasetBase(Dataset):
         else:  # testing
             pose_idx = self.pose_list[index]
             data_idx = pose_idx
-            print('data index: %d' % pose_idx)
 
         # SMPL
         with torch.no_grad():
@@ -252,7 +255,7 @@ class MvRgbDatasetBase(Dataset):
         Initialize:
         self.cam_data, a dict including ['body_pose', 'global_orient', 'transl', 'betas', ...]
         """
-        smpl_data = np.load(self.data_dir + '/smpl_params.npz', allow_pickle = True)
+        smpl_data = np.load(self.smpl_path, allow_pickle = True)
         smpl_data = dict(smpl_data)
         self.smpl_data = {k: torch.from_numpy(v.astype(np.float32)) for k, v in smpl_data.items()}
 
@@ -333,7 +336,9 @@ class MvRgbDatasetTHuman4(MvRgbDatasetBase):
         subject_name = None,
         load_smpl_pos_map = False,
         load_smpl_nml_map = False,
-        mode = '3dgs'
+        mode = '3dgs',
+        smpl_path = None,
+        smpl_model_path = None
     ):
         super(MvRgbDatasetTHuman4, self).__init__(
             data_dir,
@@ -343,7 +348,9 @@ class MvRgbDatasetTHuman4(MvRgbDatasetBase):
             subject_name,
             load_smpl_pos_map,
             load_smpl_nml_map,
-            mode
+            mode,
+            smpl_path,
+            smpl_model_path
         )
 
     def load_cam_data(self):
@@ -391,7 +398,9 @@ class MvRgbDatasetAvatarReX(MvRgbDatasetBase):
         subject_name = None,
         load_smpl_pos_map = False,
         load_smpl_nml_map = False,
-        mode = '3dgs'
+        mode = '3dgs',
+        smpl_path = None,
+        smpl_model_path = None
     ):
         super(MvRgbDatasetAvatarReX, self).__init__(
             data_dir,
@@ -401,7 +410,9 @@ class MvRgbDatasetAvatarReX(MvRgbDatasetBase):
             subject_name,
             load_smpl_pos_map,
             load_smpl_nml_map,
-            mode
+            mode,
+            smpl_path,
+            smpl_model_path
         )
 
     def load_cam_data(self):
@@ -452,7 +463,9 @@ class MvRgbDatasetActorsHQ(MvRgbDatasetBase):
         subject_name = None,
         load_smpl_pos_map = False,
         load_smpl_nml_map = False,
-        mode = '3dgs'
+        mode = '3dgs',
+        smpl_path = None,
+        smpl_model_path = None
     ):
         super(MvRgbDatasetActorsHQ, self).__init__(
             data_dir,
@@ -462,7 +475,9 @@ class MvRgbDatasetActorsHQ(MvRgbDatasetBase):
             subject_name,
             load_smpl_pos_map,
             load_smpl_nml_map,
-            mode
+            mode,
+            smpl_path,
+            smpl_model_path
         )
 
         if subject_name is None:

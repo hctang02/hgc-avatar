@@ -1,0 +1,25 @@
+# 当前服务器上的单帧端到端冒烟测试。
+work_dir: /mnt/hdd2tC/tmp/haocheng/hgc-avatar-runs/subject00-smoke
+
+source:
+  subject_name: subject00
+  dataset: MvRgbDatasetTHuman4
+  avatar_config: /mnt/hdd2tC/tmp/haocheng/hgc-avatar/configs/subject00/avatar.yaml
+  data_dir: /mnt/ssd2tB/haocheng/AnimatableGaussians/data/thuman4.0/subject00
+  smpl_model_path: /mnt/ssd2tB/haocheng/AnimatableGaussians/smpl_files/smplx
+  checkpoint: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/data/before_compress/output-thu00-test/batch_650000
+  frame_range: [0, 1, 1]
+  view_setting: front
+  img_scale: 1.0
+  cuda_device: 2
+
+compression:
+  network_q_index: 5
+  posemap:
+    codec_dir: /mnt/hdd2tC/tmp/haocheng/hgc-avatar/compress_part/codec/DCVC-DC
+    i_frame_model: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/codec/DCVC-DC/checkpoints/cvpr2023_image_psnr.pth.tar
+    p_frame_model: /mnt/ssd2tB/haocheng/AnimatableGaussians/compress_part/codec/DCVC-DC/checkpoints/cvpr2023_video_psnr.pth.tar
+    rate_num: 2
+    rate_index: 0
+    intra_period: 32
+

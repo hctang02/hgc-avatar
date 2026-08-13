@@ -26,8 +26,6 @@ from utils.renderer import Renderer
 from utils.net_util import to_cuda
 from utils.obj_io import save_mesh_as_ply
 from gaussians.obj_io import save_gaussians_as_ply
-from thop import profile
-from fvcore.nn import FlopCountAnalysis
 
 
 def safe_exists(path):
@@ -65,6 +63,8 @@ class AvatarTrainer:
         print('# Parameter number of AvatarNet is %d' % (sum([p.numel() for p in self.avatar_net.parameters()])))
 
     def calculate_mac(self):
+        from thop import profile
+
         dummy_input = torch.randn(1, 3, 512, 512).to(config.device)
         flops, params = profile(self.avatar_net, inputs=(dummy_input,))
         print(f"AvatarNet FLOPs: {flops / 1e9:.2f} GMACs")
@@ -572,7 +572,9 @@ class AvatarTrainer:
             dataset_name = testing_dataset.dataset_name
             seq_name = testing_dataset.seq_name
         else:
-            testing_dataset = MvRgbDataset(**self.opt['test']['data'], training = False)
+            testing_dataset_module = self.opt['test'].get('dataset', dataset_module)
+            TestingDataset = importlib.import_module('dataset.dataset_mv_rgb').__getattribute__(testing_dataset_module)
+            testing_dataset = TestingDataset(**self.opt['test']['data'], training = False)
             dataset_name = 'training'
             seq_name = ''
 
@@ -830,7 +832,7 @@ class AvatarTrainer:
 
     def load_ckpt(self, path, load_optm = True):
         print('Loading networks from ', path + '/net.pt')
-        net_dict = torch.load(path + '/net.pt')
+        net_dict = torch.load(path + '/net.pt', map_location = config.device)
         if 'avatar_net' in net_dict:
             self.avatar_net.load_state_dict(net_dict['avatar_net'])
         else:
@@ -840,7 +842,7 @@ class AvatarTrainer:
 
         if load_optm and os.path.exists(path + '/optm.pt'):
             print('Loading optimizers from ', path + '/optm.pt')
-            optm_dict = torch.load(path + '/optm.pt')
+            optm_dict = torch.load(path + '/optm.pt', map_location = config.device)
             if 'avatar_net' in optm_dict:
                 self.optm.load_state_dict(optm_dict['avatar_net'])
             else:
